@@ -32,19 +32,22 @@ jobs:
       - name: Configure Android NDK
         run: |
           NDK="$ANDROID_SDK_ROOT/ndk/27.3.13750724"
-
-          if [ ! -d "$NDK" ]; then
-            echo "ERROR: NDK not found: $NDK"
-            exit 1
-          fi
-
+          test -d "$NDK" || { echo "ERROR: NDK not found: $NDK"; exit 1; }
           echo "ANDROID_NDK_HOME=$NDK" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_ROOT=$NDK" >> "$GITHUB_ENV"
 
-      - name: Set up Rust for Android ARM64
+      - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android
+
+      - name: Install Android ARM64 Rust target
+        run: |
+          rustup target add aarch64-linux-android
+          rustup target list --installed
+          rustc --print target-libdir --target aarch64-linux-android
+          test -d "$(rustc --print target-libdir --target aarch64-linux-android)" || {
+            echo "ERROR: Android ARM64 Rust core library is missing."
+            exit 1
+          }
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk
@@ -97,7 +100,6 @@ jobs:
 
           if [ -z "$MANIFEST" ]; then
             echo "ERROR: Expected crates/core/Cargo.toml was not found."
-            echo "Check the source ZIP structure shown above."
             exit 1
           fi
 
@@ -107,20 +109,20 @@ jobs:
           echo "RUST_MANIFEST=$MANIFEST" >> "$GITHUB_ENV"
           echo "RUST_ROOT=$ROOT" >> "$GITHUB_ENV"
 
-          echo "Absolute Rust root: $ROOT"
-          echo "Absolute Rust manifest: $MANIFEST"
+          echo "Rust root: $ROOT"
+          echo "Rust manifest: $MANIFEST"
 
       - name: Inspect Rust crate
         run: |
-          echo "Manifest: $RUST_MANIFEST"
-          echo "Root: $RUST_ROOT"
-
           test -f "$RUST_MANIFEST"
           cat "$RUST_MANIFEST"
 
       - name: Build Rust core for Android ARM64
         run: |
-          test -f "$RUST_MANIFEST"
+          echo "Checking Rust target..."
+          rustup target list --installed
+          test -d "$(rustc --print target-libdir --target aarch64-linux-android)"
+
           cd "$RUST_ROOT"
 
           cargo ndk \
@@ -132,8 +134,6 @@ jobs:
 
       - name: Locate and copy Rust shared library
         run: |
-          echo "Searching for compiled shared libraries..."
-
           find "$RUST_ROOT/target" -type f -name '*.so' -print || true
 
           LIBRARY="$(find "$RUST_ROOT/target" -type f \
@@ -141,15 +141,13 @@ jobs:
 
           if [ -z "$LIBRARY" ]; then
             echo "ERROR: libhatchzip_core.so was not generated."
-            echo "The crate may use a different library name or may not be configured as a cdylib."
+            echo "The Rust crate may need cdylib configuration or may use a different library name."
             exit 1
           fi
 
           DEST="$PROJECT_DIR/app/src/main/jniLibs/arm64-v8a"
           mkdir -p "$DEST"
           cp "$LIBRARY" "$DEST/"
-
-          echo "Copied library:"
           ls -lh "$DEST"
 
       - name: Set up Gradle
@@ -164,12 +162,7 @@ jobs:
       - name: Verify APK
         run: |
           APK="$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk"
-
-          if [ ! -f "$APK" ]; then
-            echo "ERROR: APK was not generated."
-            exit 1
-          fi
-
+          test -f "$APK" || { echo "ERROR: APK was not generated."; exit 1; }
           ls -lh "$APK"
 
       - name: Upload APK
