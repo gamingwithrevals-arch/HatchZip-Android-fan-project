@@ -71,8 +71,8 @@ jobs:
           RUST_ROOT="$(find extracted_rust -maxdepth 2 -type d -name "hatchzip-*")"
           cd "$RUST_ROOT"
           
-          # Use cargo-ndk to compile the core library for your phone's architecture
-          cargo ndk -t arm64-v8a --plat 28 -- build --release --manifest-path crates/core/Cargo.toml
+          # Use cargo-ndk with correct --platform flag
+          cargo ndk -t arm64-v8a --platform 28 -- build --release --manifest-path crates/core/Cargo.toml
           
           # Create jniLibs directory inside the Android app to hold the compiled Rust library
           JNI_LIBS="$GITHUB_WORKSPACE/$PROJECT_DIR/app/src/main/jniLibs/arm64-v8a"
