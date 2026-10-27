@@ -1,5 +1,4 @@
-
-name: Build HatchZip Android APK
+name: Build HatchZip Android APK with Rust
 
 on:
   workflow_dispatch:
@@ -24,44 +23,74 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
+      - name: Set up Android SDK & NDK
         uses: android-actions/setup-android@v4
+        with:
+          ndk-version: '26.1.10909125'
 
       - name: Accept Android SDK licenses
         run: yes | sdkmanager --licenses
 
-      - name: Install Android SDK
+      - name: Install Android SDK Platform and Build Tools
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
 
-      - name: Check ZIP exists
+      - name: Set up Rust toolchain for Android (ARM64)
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          target: aarch64-linux-android
+          override: true
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Check files exist
         run: |
           ls -la
           test -f HatchZip-Android-Starter.zip
+          test -f hatchzip-0.1.6.zip
 
-      - name: Extract project ZIP
+      - name: Extract project zips
         run: |
-          mkdir extracted
-          unzip -o HatchZip-Android-Starter.zip -d extracted
-          find extracted -maxdepth 5 -type f
+          mkdir -p extracted_app extracted_rust
+          unzip -o HatchZip-Android-Starter.zip -d extracted_app
+          unzip -o hatchzip-0.1.6.zip -d extracted_rust
 
-      - name: Find Gradle project
+      - name: Find Gradle project directory
         run: |
-          PROJECT_DIR="$(dirname "$(find extracted -type f -name settings.gradle.kts -print -quit)")"
+          PROJECT_DIR="$(dirname "$(find extracted_app -type f -name settings.gradle.kts -print -quit)")"
           if [ -z "$PROJECT_DIR" ] || [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
-            echo "ERROR: Could not find the Android Gradle project in the ZIP."
+            echo "ERROR: Could not find the Android Gradle project in the starter ZIP."
             exit 1
           fi
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Compile Rust Core for Android (ARM64)
+        run: |
+          RUST_ROOT="$(find extracted_rust -maxdepth 2 -type d -name "hatchzip-*")"
+          cd "$RUST_ROOT"
+          
+          # Use cargo-ndk to compile the core library for your phone's architecture
+          cargo ndk -t arm64-v8a --plat 28 -- build --release --manifest-path crates/core/Cargo.toml
+          
+          # Create jniLibs directory inside the Android app to hold the compiled Rust library
+          JNI_LIBS="$GITHUB_WORKSPACE/$PROJECT_DIR/app/src/main/jniLibs/arm64-v8a"
+          mkdir -p "$JNI_LIBS"
+          
+          # Copy the compiled library over
+          cp target/aarch64-linux-android/release/libhatchzip_core.so "$JNI_LIBS/" || cp target/aarch64-linux-android/release/*.so "$JNI_LIBS/" || echo "Checked standard output paths"
+          ls -la "$JNI_LIBS"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.14'
 
-      - name: Build APK
+      - name: Build APK with Gradle
         run: gradle --no-daemon -p "$PROJECT_DIR" assembleDebug
 
-      - name: Upload APK
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: HatchZip-Android-debug
