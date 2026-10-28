@@ -1,235 +1,54 @@
-name: Build HatchZip Android APK with Rust
+name: Build HatchZip Android APK
 
-on: [push, workflow_dispatch]
-
-permissions:
-  contents: read
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
 
 jobs:
-  build:
+  build-apk:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
+      - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Set up Java
-        uses: actions/setup-java@v5
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
         with:
-          distribution: temurin
+          distribution: 'temurin'
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
-
-      - name: Accept Android SDK licenses
-        run: yes | sdkmanager --licenses
-
-      - name: Install Android SDK and NDK
-        run: |
-          sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.3.13750724"
-
-      - name: Configure Android NDK
-        run: |
-          NDK="$ANDROID_SDK_ROOT/ndk/27.3.13750724"
-
-          if [ ! -d "$NDK" ]; then
-            echo "ERROR: NDK not found: $NDK"
-            exit 1
-          fi
-
-          echo "ANDROID_NDK_HOME=$NDK" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK_ROOT=$NDK" >> "$GITHUB_ENV"
-
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
         with:
-          toolchain: stable
-          targets: aarch64-linux-android
+          accept-android-sdk-licenses: true
+          packages: 'platform-tools build-tools;35.0.0 platforms;android-35'
 
-      - name: Verify Rust Android target
+      - name: Install NDK & cargo-ndk
         run: |
-          set -e
+          yes | sdkmanager --licenses || true
+          sdkmanager "ndk;26.3.11579264"
+          cargo install cargo-ndk
 
-          echo "Active Rust toolchain:"
-          rustup show active-toolchain
-
-          echo "Rust compiler:"
-          rustc --version
-
-          echo "Installed Rust targets:"
-          rustup target list --installed
-
-          echo "Checking Android target library:"
-          TARGET_LIBDIR="$(rustc --print target-libdir --target aarch64-linux-android)"
-          echo "$TARGET_LIBDIR"
-
-          if [ ! -d "$TARGET_LIBDIR" ]; then
-            echo "ERROR: Android target library directory is missing."
-            exit 1
-          fi
-
-          rustc --target aarch64-linux-android --crate-type lib \
-            --emit metadata -o /tmp/android-target-check.rmeta \
-            - <<'EOF'
-          #![no_std]
-          pub fn target_check() {}
-          EOF
-
-          echo "Android Rust target verification passed."
-
-      - name: Install cargo-ndk
-        run: cargo install cargo-ndk
-
-      - name: Check source ZIPs
+      - name: Ensure Android Target is Installed on Active Toolchain
         run: |
-          test -f "$GITHUB_WORKSPACE/HatchZip-Android-Starter.zip"
-          test -f "$GITHUB_WORKSPACE/hatchzip-0.1.6.zip"
+          rustup target add aarch64-linux-android
 
-      - name: Extract source ZIPs
+      - name: Compile HatchZip Rust Engine for S25 Ultra (arm64-v8a)
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/26.3.11579264
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/extracted_app"
-          mkdir -p "$GITHUB_WORKSPACE/extracted_rust"
+          cd android/rust-jni
+          cargo ndk -t arm64-v8a -o ../app/src/main/jniLibs build --release
 
-          unzip -o "$GITHUB_WORKSPACE/HatchZip-Android-Starter.zip" \
-            -d "$GITHUB_WORKSPACE/extracted_app"
-
-          unzip -o "$GITHUB_WORKSPACE/hatchzip-0.1.6.zip" \
-            -d "$GITHUB_WORKSPACE/extracted_rust"
-
-      - name: Find Android project
+      - name: Build Android APK with Gradle
         run: |
-          set -e
+          cd android
+          chmod +x gradlew || true
+          gradle assembleRelease --no-daemon
 
-          SETTINGS="$(find "$GITHUB_WORKSPACE/extracted_app" \
-            -type f -name settings.gradle.kts -print -quit)"
-
-          if [ -z "$SETTINGS" ]; then
-            echo "ERROR: settings.gradle.kts not found."
-            exit 1
-          fi
-
-          PROJECT_DIR="$(dirname "$SETTINGS")"
-
-          if [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
-            echo "ERROR: app/build.gradle.kts not found."
-            exit 1
-          fi
-
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Android project: $PROJECT_DIR"
-
-      - name: Find Rust core manifest
-        run: |
-          set -e
-
-          BASE="$GITHUB_WORKSPACE/extracted_rust"
-
-          echo "Available Cargo manifests:"
-          find "$BASE" -type f -name Cargo.toml -print
-
-          MANIFEST="$(find "$BASE" -type f \
-            -path '*/crates/core/Cargo.toml' -print -quit)"
-
-          if [ -z "$MANIFEST" ]; then
-            echo "ERROR: Expected crates/core/Cargo.toml was not found."
-            echo "Check the source ZIP structure above."
-            exit 1
-          fi
-
-          MANIFEST="$(realpath "$MANIFEST")"
-          ROOT="$(dirname "$(dirname "$(dirname "$MANIFEST")")")"
-
-          echo "RUST_MANIFEST=$MANIFEST" >> "$GITHUB_ENV"
-          echo "RUST_ROOT=$ROOT" >> "$GITHUB_ENV"
-
-          echo "Rust root: $ROOT"
-          echo "Rust manifest: $MANIFEST"
-
-      - name: Inspect Rust crate
-        run: |
-          set -e
-
-          echo "Manifest: $RUST_MANIFEST"
-          echo "Root: $RUST_ROOT"
-
-          test -f "$RUST_MANIFEST"
-          cat "$RUST_MANIFEST"
-
-      - name: Build Rust core for Android ARM64
-        run: |
-          set -e
-
-          echo "Active toolchain:"
-          rustup show active-toolchain
-
-          echo "Installed targets:"
-          rustup target list --installed
-
-          echo "Verifying Android target library:"
-          TARGET_LIBDIR="$(rustc --print target-libdir --target aarch64-linux-android)"
-          test -d "$TARGET_LIBDIR"
-
-          echo "Building HatchZip Rust core..."
-          cd "$RUST_ROOT"
-
-          cargo ndk \
-            -t arm64-v8a \
-            --platform 28 \
-            build \
-            --release \
-            --manifest-path "$RUST_MANIFEST"
-
-      - name: Locate and copy Rust shared library
-        run: |
-          set -e
-
-          echo "Searching for compiled shared libraries..."
-          find "$RUST_ROOT/target" -type f -name '*.so' -print || true
-
-          LIBRARY="$(find "$RUST_ROOT/target" -type f \
-            -name 'libhatchzip_core.so' -print -quit)"
-
-          if [ -z "$LIBRARY" ]; then
-            echo "ERROR: libhatchzip_core.so was not generated."
-            echo "The crate may use a different library name or may not be configured as a cdylib."
-            exit 1
-          fi
-
-          DEST="$PROJECT_DIR/app/src/main/jniLibs/arm64-v8a"
-          mkdir -p "$DEST"
-          cp "$LIBRARY" "$DEST/"
-
-          echo "Copied Rust library:"
-          ls -lh "$DEST"
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.14'
-
-      - name: Build Android APK
-        run: |
-          gradle --no-daemon -p "$PROJECT_DIR" assembleDebug
-
-      - name: Verify APK
-        run: |
-          set -e
-
-          APK="$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk"
-
-          if [ ! -f "$APK" ]; then
-            echo "ERROR: APK was not generated."
-            exit 1
-          fi
-
-          echo "APK generated successfully:"
-          ls -lh "$APK"
-
-      - name: Upload APK
+      - name: Upload Ready-to-Install APK
         uses: actions/upload-artifact@v4
         with:
-          name: HatchZip-Android-debug
-          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-          retention-days: 14
+          name: HatchZip-iOS-Edition-APK
+          path: android/app/build/outputs/apk/release/app-release.apk
