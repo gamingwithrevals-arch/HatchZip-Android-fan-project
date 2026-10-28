@@ -12,6 +12,13 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
+      - name: Clone Original HatchZip Source Code
+        run: |
+          git clone https://github.com/xevrion/hatchzip.git temp-repo
+          mkdir -p crates
+          cp -r temp-repo/crates/core crates/
+          rm -rf temp-repo
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -22,18 +29,20 @@ jobs:
         uses: android-actions/setup-android@v3
         with:
           accept-android-sdk-licenses: true
-          packages: 'platform-tools build-tools;35.0.0 platforms;android-35'
+          packages: 'platform-tools build-tools;35.0.0 platforms;android-35 ndk;27.3.13750724'
 
-      - name: Install NDK & cargo-ndk
+      - name: Install cargo-ndk
         run: |
           yes | sdkmanager --licenses || true
-          sdkmanager "ndk;26.3.11579264"
-          rustup target add aarch64-linux-android
           cargo install cargo-ndk
+
+      - name: Ensure Android Target is Installed
+        run: |
+          rustup target add aarch64-linux-android
 
       - name: Compile HatchZip Rust Engine for S25 Ultra (arm64-v8a)
         env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/26.3.11579264
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.3.13750724
         run: |
           cd android/rust-jni
           cargo ndk -t arm64-v8a -o ../app/src/main/jniLibs build --release
